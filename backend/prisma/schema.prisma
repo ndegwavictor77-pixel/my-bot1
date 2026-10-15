@@ -1,0 +1,535 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================
+// ENUMS
+// =============================================
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum TradingAccountStatus {
+  ACTIVE
+  INACTIVE
+  DISCONNECTED
+  SUSPENDED
+}
+
+enum AccountEnvironment {
+  DEMO
+  LIVE
+}
+
+enum BotStatus {
+  STOPPED
+  STARTING
+  RUNNING
+  PAUSED
+  ERROR
+}
+
+enum TradingMode {
+  ALL_QUALIFYING
+  STRONGEST_SETUP
+}
+
+enum StrategyType {
+  ICT_SMC
+  TECHNICAL
+  HYBRID
+}
+
+enum TradeDirection {
+  BUY
+  SELL
+}
+
+enum SignalStatus {
+  NEW
+  APPROVED
+  REJECTED
+  EXECUTED
+  EXPIRED
+  CANCELLED
+}
+
+enum SignalType {
+  BOS
+  CHOCH
+  LIQUIDITY_SWEEP
+  ORDER_BLOCK
+  FVG
+  IFVG
+  EMA_CROSSOVER
+  RSI_CONFIRMATION
+  ATR_FILTER
+  COMBINED
+}
+
+enum OrderType {
+  MARKET
+  BUY_LIMIT
+  SELL_LIMIT
+  BUY_STOP
+  SELL_STOP
+}
+
+enum OrderStatus {
+  PENDING
+  SUBMITTED
+  FILLED
+  PARTIALLY_FILLED
+  CANCELLED
+  REJECTED
+  EXPIRED
+}
+
+enum TradeStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum ExitReason {
+  TAKE_PROFIT
+  STOP_LOSS
+  MANUAL
+  TRAILING_STOP
+  DAILY_RISK_LIMIT
+  STRATEGY_EXIT
+  OTHER
+}
+
+enum BotEventType {
+  CONNECTED
+  DISCONNECTED
+  STARTED
+  STOPPED
+  PAUSED
+  RESUMED
+  ERROR
+  HEARTBEAT
+  CONFIG_UPDATED
+  TRADE_OPENED
+  TRADE_CLOSED
+  SIGNAL_RECEIVED
+  RISK_LIMIT_REACHED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  BOT_STARTED
+  BOT_STOPPED
+  TRADE_EXECUTED
+  CONFIG_CHANGED
+  ACCOUNT_CONNECTED
+  ACCOUNT_DISCONNECTED
+}
+
+// =============================================
+// USER
+// =============================================
+
+model User {
+  id       Int        @id @default(autoincrement())
+  name     String
+  email    String     @unique
+  password String
+  role     UserRole   @default(USER)
+  status   UserStatus @default(ACTIVE)
+
+  emailVerified Boolean   @default(false)
+  lastLoginAt   DateTime?
+
+  tradingAccounts TradingAccount[]
+  configurations  BotConfiguration[]
+  botInstances    BotInstance[]
+  signals         TradeSignal[]
+  trades          Trade[]
+  auditLogs       AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([role])
+}
+
+// =============================================
+// TRADING ACCOUNT
+// =============================================
+
+model TradingAccount {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  accountName  String?
+  broker       String?
+  server       String?
+  accountLogin String
+
+  environment AccountEnvironment   @default(DEMO)
+  status      TradingAccountStatus @default(INACTIVE)
+
+  currency   String   @default("USD")
+  balance    Decimal? @db.Decimal(18, 2)
+  equity     Decimal? @db.Decimal(18, 2)
+  margin     Decimal? @db.Decimal(18, 2)
+  freeMargin Decimal? @db.Decimal(18, 2)
+  leverage   Int?
+
+  lastConnectedAt DateTime?
+  lastHeartbeatAt DateTime?
+
+  configurations BotConfiguration[]
+  botInstances   BotInstance[]
+  trades         Trade[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, server, accountLogin])
+  @@index([userId])
+  @@index([status])
+  @@index([environment])
+}
+
+// =============================================
+// BOT CONFIGURATION
+// =============================================
+
+model BotConfiguration {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tradingAccountId Int
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  enabled      Boolean      @default(true)
+  strategyType StrategyType @default(HYBRID)
+  tradingMode  TradingMode  @default(ALL_QUALIFYING)
+
+  // Broker-specific forex symbol names.
+  symbols String[] @default(["EURUSD", "GBPUSD", "USDJPY"])
+
+  // Market analysis and entry timeframes.
+  analysisTimeframe String @default("M15")
+  entryTimeframe    String @default("M5")
+
+  // Risk management.
+  riskPercentPerTrade   Decimal @default(0.5) @db.Decimal(5, 2)
+  maxOpenRiskPercent    Decimal @default(2.0) @db.Decimal(5, 2)
+  dailyLossLimitPercent Decimal @default(3.0) @db.Decimal(5, 2)
+  maxConsecutiveLosses  Int     @default(3)
+  maxOpenTrades         Int     @default(3)
+  minRiskReward         Decimal @default(2.0) @db.Decimal(5, 2)
+  maxSpreadPoints       Int     @default(30)
+  stopAfterDailyLoss    Boolean @default(true)
+
+  // ICT / Smart Money Concepts.
+  useMarketStructure Boolean @default(true)
+  useBOS             Boolean @default(true)
+  useCHOCH           Boolean @default(true)
+  useLiquiditySweeps Boolean @default(true)
+  useOrderBlocks     Boolean @default(true)
+  useFVG             Boolean @default(true)
+  useIFVG            Boolean @default(true)
+
+  minConfluenceScore Int @default(70)
+
+  // EMA settings.
+  useEMAFilter  Boolean @default(true)
+  emaFastPeriod Int     @default(50)
+  emaSlowPeriod Int     @default(200)
+
+  // RSI settings.
+  useRSIFilter Boolean @default(true)
+  rsiPeriod    Int     @default(14)
+  rsiBuyLevel  Decimal @default(50) @db.Decimal(5, 2)
+  rsiSellLevel Decimal @default(50) @db.Decimal(5, 2)
+
+  // ATR settings.
+  useATRFilter      Boolean @default(true)
+  atrPeriod         Int     @default(14)
+  atrStopMultiplier Decimal @default(1.5) @db.Decimal(6, 2)
+
+  // Trade execution settings.
+  allowBuy             Boolean @default(true)
+  allowSell            Boolean @default(true)
+  manageExistingTrades Boolean @default(true)
+  autoTrading          Boolean @default(false)
+
+  botInstances BotInstance[]
+  signals      TradeSignal[]
+  trades       Trade[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([tradingAccountId])
+  @@index([enabled])
+}
+
+// =============================================
+// BOT INSTANCE
+// One running EA installation/session.
+// =============================================
+
+model BotInstance {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tradingAccountId Int
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  configurationId Int
+  configuration   BotConfiguration @relation(fields: [configurationId], references: [id], onDelete: Cascade)
+
+  name   String?
+  status BotStatus @default(STOPPED)
+
+  instanceKey String @unique
+
+  terminalVersion String?
+  eaVersion       String?
+  symbol          String?
+  timeframe       String?
+  ipAddress       String?
+
+  lastHeartbeatAt DateTime?
+  connectedAt     DateTime?
+  disconnectedAt  DateTime?
+  lastError       String?
+
+  events BotEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([tradingAccountId])
+  @@index([configurationId])
+  @@index([status])
+  @@index([lastHeartbeatAt])
+}
+
+// =============================================
+// BOT EVENTS
+// =============================================
+
+model BotEvent {
+  id            Int         @id @default(autoincrement())
+  botInstanceId Int
+  botInstance   BotInstance @relation(fields: [botInstanceId], references: [id], onDelete: Cascade)
+
+  eventType BotEventType
+  message   String?
+  details   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([botInstanceId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+// =============================================
+// TRADE SIGNAL
+// =============================================
+
+model TradeSignal {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  configurationId Int
+  configuration   BotConfiguration @relation(fields: [configurationId], references: [id], onDelete: Cascade)
+
+  symbol     String
+  direction  TradeDirection
+  signalType SignalType     @default(COMBINED)
+
+  analysisTimeframe String @default("M15")
+  entryTimeframe    String @default("M5")
+
+  entryPrice Decimal? @db.Decimal(18, 8)
+  stopLoss   Decimal? @db.Decimal(18, 8)
+  takeProfit Decimal? @db.Decimal(18, 8)
+
+  confidenceScore Int     @default(0)
+  reason          String?
+  metadata        Json?
+
+  status SignalStatus @default(NEW)
+
+  generatedAt DateTime  @default(now())
+  expiresAt   DateTime?
+  processedAt DateTime?
+
+  trades Trade[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([configurationId])
+  @@index([symbol])
+  @@index([status])
+  @@index([generatedAt])
+  @@index([symbol, status])
+}
+
+// =============================================
+// TRADE ORDER
+// =============================================
+
+model TradeOrder {
+  id String @id @default(cuid())
+
+  // Unique identifier for safe retries.
+  clientOrderId String  @unique
+  brokerOrderId String?
+
+  symbol    String
+  orderType OrderType
+  direction TradeDirection
+
+  volume Decimal @db.Decimal(18, 8)
+
+  requestedPrice Decimal? @db.Decimal(18, 8)
+  filledPrice    Decimal? @db.Decimal(18, 8)
+  stopLoss       Decimal? @db.Decimal(18, 8)
+  takeProfit     Decimal? @db.Decimal(18, 8)
+
+  status OrderStatus @default(PENDING)
+
+  comment      String?
+  errorMessage String?
+
+  submittedAt DateTime?
+  filledAt    DateTime?
+  cancelledAt DateTime?
+
+  tradeId Int?   @unique
+  trade   Trade? @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([symbol])
+  @@index([status])
+  @@index([brokerOrderId])
+  @@index([createdAt])
+}
+
+// =============================================
+// TRADE
+// =============================================
+
+model Trade {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tradingAccountId Int
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  configurationId Int
+  configuration   BotConfiguration @relation(fields: [configurationId], references: [id], onDelete: Restrict)
+
+  signalId Int?
+  signal   TradeSignal? @relation(fields: [signalId], references: [id], onDelete: SetNull)
+
+  brokerPositionId String?
+
+  symbol    String
+  direction TradeDirection
+  status    TradeStatus    @default(OPEN)
+
+  volume     Decimal  @db.Decimal(18, 8)
+  entryPrice Decimal  @db.Decimal(18, 8)
+  exitPrice  Decimal? @db.Decimal(18, 8)
+
+  stopLoss   Decimal? @db.Decimal(18, 8)
+  takeProfit Decimal? @db.Decimal(18, 8)
+
+  profit     Decimal? @db.Decimal(18, 2)
+  commission Decimal? @db.Decimal(18, 2)
+  swap       Decimal? @db.Decimal(18, 2)
+  netProfit  Decimal? @db.Decimal(18, 2)
+
+  riskAmount Decimal? @db.Decimal(18, 2)
+  riskReward Decimal? @db.Decimal(10, 4)
+
+  exitReason ExitReason?
+
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
+
+  order TradeOrder?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([tradingAccountId])
+  @@index([configurationId])
+  @@index([signalId])
+  @@index([symbol])
+  @@index([status])
+  @@index([openedAt])
+  @@index([closedAt])
+}
+
+// =============================================
+// AUDIT LOG
+// =============================================
+
+model AuditLog {
+  id     Int   @id @default(autoincrement())
+  userId Int?
+  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action AuditAction
+
+  entity   String?
+  entityId String?
+
+  description String?
+  metadata    Json?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
